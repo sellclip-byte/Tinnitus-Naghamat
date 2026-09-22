@@ -1,0 +1,25 @@
+{
+  "name": "Tinnitus Help",
+  "short_name": "Tinnitus Help",
+  "description": "Free offline tinnitus sound tool.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#06131d",
+  "theme_color": "#06131d",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/pwa-ear-192-v5.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-ear-512-v5.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
