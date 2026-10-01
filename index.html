@@ -1,5 +1,5 @@
 <!doctype html><html lang="en"><head>
-<link rel="apple-touch-icon" href="./apple-touch-icon.png?v=6>
+<link rel="apple-touch-icon" href="./apple-touch-icon.png?v=6">
 <link rel="apple-touch-icon-precomposed" href="./apple-touch-icon-precomposed.png?v=6">
 
 <meta property="og:title" content="Tinnitus Help — Free Offline App">
@@ -1624,4 +1624,73 @@ body>*:not(#goldenApp):not(#identityLaunchStatic):not(script):not(style){display
  if(splash){document.body.classList.add('splash-active');var btn=document.getElementById('approvedStartHotspot');if(btn)btn.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();close();document.body.classList.remove('splash-active')});setTimeout(function(){close();document.body.classList.remove('splash-active')},5000)}
  [2700,3200,4000].forEach(function(ms){setTimeout(enforce,ms)});
 })();
+</script><!-- Background-audio keep-alive for iPhone.
+     Paste this whole block ONCE at the very end of index.html (after the last </script>).
+     It only adds behavior; it does not change any existing sound code. -->
+<script id="bg-audio-keepalive">
+(function(){
+  var ka=null, idle=0, hookedCtx=null;
+
+  // 1 second of silence generated in code (no extra file needed, works offline).
+  function silentWav(){
+    var sr=8000, n=sr, b=new ArrayBuffer(44+n*2), v=new DataView(b);
+    function w(o,s){for(var i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))}
+    w(0,'RIFF');v.setUint32(4,36+n*2,true);w(8,'WAVE');w(12,'fmt ');
+    v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+    v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);
+    w(36,'data');v.setUint32(40,n*2,true);
+    return URL.createObjectURL(new Blob([b],{type:'audio/wav'}));
+  }
+  function ensure(){
+    if(ka)return ka;
+    ka=new Audio();
+    ka.src=silentWav(); ka.loop=true; ka.preload='auto';
+    ka.setAttribute('playsinline',''); ka.setAttribute('aria-hidden','true');
+    return ka;
+  }
+  function session(state){
+    try{ if('audioSession' in navigator) navigator.audioSession.type='playback'; }catch(e){}
+    try{ if('mediaSession' in navigator) navigator.mediaSession.playbackState=state; }catch(e){}
+  }
+  function anyActive(){
+    try{ return (active.size>0)||(mixVoices.length>0); }catch(e){ return false; }
+  }
+  function context(){ try{ return ctx||null; }catch(e){ return null; } }
+  function resume(){
+    var c=context();
+    if(c&&c.state!=='running'){ try{ c.resume().catch(function(){}); }catch(e){} }
+  }
+  function start(){
+    var a=ensure(); session('playing');
+    var p=a.play(); if(p&&p.catch)p.catch(function(){});
+    resume();
+  }
+  function stop(){ if(ka&&!ka.paused)ka.pause(); session('paused'); }
+
+  // Ask iOS for a "playback" audio session as early as possible.
+  try{ if('audioSession' in navigator) navigator.audioSession.type='playback'; }catch(e){}
+
+  // Must start inside a real tap, so iOS allows the silent loop to run later while locked.
+  function gesture(e){
+    var t=(e.target&&e.target.closest)?e.target.closest('#sounds .sound,#playMix,#v30playSaved,#v31restore,#preview'):null;
+    if(t)start();
+  }
+  document.addEventListener('click',gesture,true);
+  document.addEventListener('touchend',gesture,true);
+
+  // Keep everything alive while any sound is playing; release it when nothing is.
+  setInterval(function(){
+    var c=context();
+    if(c&&hookedCtx!==c){ hookedCtx=c; c.onstatechange=function(){ if(anyActive())resume(); }; }
+    if(anyActive()){
+      idle=0;
+      if(!ka||ka.paused)start(); else session('playing');
+      resume();
+    }else if(ka&&!ka.paused&&++idle>=2){ stop(); idle=0; }
+  },1000);
+
+  document.addEventListener('visibilitychange',function(){ if(anyActive())start(); });
+  window.addEventListener('pageshow',function(){ if(anyActive())start(); });
+})();
 </script>
+
