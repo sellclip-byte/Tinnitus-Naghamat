@@ -298,13 +298,32 @@ const defs=[["dt.sound","dt.sound","dtsound",{"freq":7700,"band":1200,"mod":4,"t
 let selected=defs[0],layers=[],ctx,timer=null,mixVoices=[],active=new Map(),chosen=60;
 const $=id=>document.getElementById(id), sounds=$('sounds');
 function audio(){return ctx||(ctx=new (window.AudioContext||window.webkitAudioContext)())}
+function resumeAudioEngine(){
+ try{const c=audio(); if(c.state==='suspended') c.resume().catch(()=>{})}catch(e){}
+}
+function attachPhoneKeepAlive(){
+ if(window.__fthPhoneAudioBound) return;
+ window.__fthPhoneAudioBound=1;
+ const kick=()=>resumeAudioEngine();
+ document.addEventListener('visibilitychange',()=>{if(!document.hidden)kick()});
+ window.addEventListener('pageshow',kick);
+ window.addEventListener('focus',kick);
+ ['touchstart','pointerdown','click'].forEach(ev=>document.addEventListener(ev,kick,{passive:true}));
+ try{
+  if('mediaSession' in navigator){
+   navigator.mediaSession.setActionHandler('play',kick);
+  }
+ }catch(e){}
+}
 function params(){return {freq:+$('freq').value,band:+$('band').value,mod:+$('mod').value,texture:+$('texture').value,vol:+$('vol').value}}
 function stopVoice(v){
  if(!v)return;
+ v.alive=false;
  if(v.media){
-  try{v.media.pause();v.media.currentTime=0;v.media.removeAttribute('src');v.media.load();}catch(e){}
-  v.media=null;return;
+  try{v.media.pause();v.media.onended=null;v.media.currentTime=0;v.media.removeAttribute('src');v.media.load();}catch(e){}
+  v.media=null;
  }
+ try{if(v.source)v.source.stop()}catch(e){}
  try{v.sources&&v.sources.forEach(s=>{try{s.stop()}catch(e){}})}catch(e){}
  try{v.all&&v.all.forEach(n=>{try{n.disconnect()}catch(e){}})}catch(e){}
 }
@@ -355,7 +374,7 @@ function makeWebAudio(type,p){
  else if(type==='cloud'){filter=filteredNoise(p.freq,Math.max(500,p.band));primary.push(osc('sine',p.freq,.12));primary.push(osc('sine',Math.min(16000,p.freq+Math.max(40,p.band*.18)),.08))}
  else if(type==='highring'||type==='softring'||type==='whistle'){primary.push(osc('sine',p.freq,type==='softring'?.48:.62)); if(type==='highring')primary.push(osc('sine',Math.min(16000,p.freq*1.008),.12));}
  else primary.push(osc('sine',p.freq,.62));
- return {type,p:{...p},master,pan:panNode,sources,all,primary,filter,lfo}
+ return {alive:true,type,p:{...p},master,pan:panNode,sources,all,primary,filter,lfo}
 }
 function updateVoiceWebAudio(v,p){
  if(!v)return;let c=audio();v.p={...p};v.master.gain.setTargetAtTime(Math.min(p.vol/100,.55),c.currentTime,.015);
@@ -368,19 +387,40 @@ function updateVoiceWebAudio(v,p){
  }
  if(v.type==='dual'&&v.primary[1])v.primary[1].frequency.setTargetAtTime(Math.min(16000,p.freq+Math.max(20,p.band*.12)),c.currentTime,.02);
 }
-function make(type,p){
- const isiOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
- if(isiOS){
-  let idx=-1,best=1e99;
-  for(let i=0;i<defs.length;i++){if(defs[i][2]===type){let q=Math.abs(defs[i][3].freq-p.freq);if(q<best){best=q;idx=i}}}
-  if(idx>=0){
-   let el=new Audio('MediaSounds/s'+String(idx).padStart(3,'0')+'.m4a'); el.loop=true; el.preload='auto'; el.playsInline=true;
-   el.volume=Math.min(p.vol/100,.55); el.dataset.basefreq=String(defs[idx][3].freq||p.freq||1); el.play().catch(()=>{});
-   return {type,p:{...p},media:el,mediaIndex:idx,sources:[],all:[],primary:[],filter:null,lfo:null,
-    master:{gain:{setTargetAtTime:(v)=>{el.volume=Math.max(0,Math.min(1,v))}}},pan:{pan:{value:+(localStorage.getItem('fth-v32-ear')||0)}}};
+function sampleUrlsFor(type,p){
+ let idx=-1,best=1e99;
+ for(let i=0;i<defs.length;i++){if(defs[i][2]===type){let q=Math.abs((defs[i][3].freq||0)-p.freq);if(q<best){best=q;idx=i}}}
+ if(idx<0) return [];
+ const id='s'+String(idx).padStart(3,'0')+'.m4a';
+ return ['MediaSounds/'+id, id];
+}
+function tryLoadLoopingSample(v,type,p){
+ const urls=sampleUrlsFor(type,p);
+ if(!urls.length) return;
+ const c=audio();
+ (async()=>{
+  for(const url of urls){
+   try{
+    const res=await fetch(url,{cache:'force-cache'});
+    if(!res.ok) continue;
+    const buf=await c.decodeAudioData(await res.arrayBuffer());
+    if(!v.alive) return;
+    try{v.sources&&v.sources.forEach(s=>{try{s.stop()}catch(e){}})}catch(e){}
+    const s=c.createBufferSource();
+    s.buffer=buf; s.loop=true;
+    s.connect(v.master); s.start();
+    v.sources=[s]; v.all.push(s);
+    return;
+   }catch(e){}
   }
- }
- return makeWebAudio(type,p);
+ })();
+}
+function make(type,p){
+ attachPhoneKeepAlive();
+ resumeAudioEngine();
+ const v=makeWebAudio(type,p);
+ tryLoadLoopingSample(v,type,p);
+ return v;
 }
 function updateVoice(v,p){
  if(v&&v.media){v.p={...p};v.media.volume=Math.min(p.vol/100,.55);let base=+(v.media.dataset.basefreq||p.freq||1);v.media.playbackRate=Math.max(.5,Math.min(2,p.freq/base));return}
@@ -404,12 +444,13 @@ defs.forEach((d,i)=>{
  b.textContent='▶ '+d[1];
  b.onclick=async()=>{selected=d;if(ctx&&ctx.state==='suspended')await ctx.resume();if(active.has(i)){stopVoice(active.get(i));active.delete(i);setButton(b,false)}else{let pp={...params(),...(d[3]||{})};
 if(d[2]==='dtsound'){
+  attachPhoneKeepAlive();
   const c=audio(); if(c.state==='suspended') await c.resume();
   const buf=await ensureDtBuffer();
   const s=c.createBufferSource(), g=c.createGain(), panNode=c.createStereoPanner();
   s.buffer=buf; s.loop=true; g.gain.value=Math.min(.55,pp.vol/100*.55); panNode.pan.value=+(localStorage.getItem('fth-v32-ear')||0);
   s.connect(g); g.connect(panNode); panNode.connect(c.destination); s.start();
-  active.set(i,{type:'dtsound',primary:[s],gain:g,pan:panNode,source:s,params:pp});
+  active.set(i,{alive:true,type:'dtsound',primary:[s],gain:g,pan:panNode,source:s,sources:[s],params:pp});
 }else active.set(i,make(d[2],pp));
 setButton(b,true)}};
  sounds.appendChild(b)
